@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FC서울 U15 · 데이터 관리자</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+:root{
+  --pitch-950:#0c1a12; --pitch-900:#123521; --pitch-700:#1f5c37; --pitch-600:#2c7a49;
+  --pitch-100:#e7f0e8; --paper:#f6f5ef; --card:#ffffff; --ink:#16241c; --ink-soft:#5a6b60;
+  --line:#e1e0d5; --gold:#d3a13a; --red:#b3492f; --radius-s:4px; --radius-m:8px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;background:var(--paper);color:var(--ink);font-family:'Inter',system-ui,sans-serif;}
+.header{background:linear-gradient(180deg,var(--pitch-950),var(--pitch-900));color:#fff;padding:22px 24px;}
+.header .club{font-size:12px;opacity:.75;}
+.header h1{font-size:20px;margin:4px 0 0;}
+.wrap{max-width:640px;margin:0 auto;padding:24px 20px 80px;}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius-m);padding:20px;margin-bottom:16px;}
+.card h2{font-size:15px;margin:0 0 12px;}
+.field{margin-bottom:14px;}
+.field label{display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:6px;}
+.field select,.field input[type=file],.field input[type=password],.field input[type=text]{
+  width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:var(--radius-s);font-size:13px;
+}
+.btn{border:1px solid var(--line);background:var(--pitch-100);color:var(--pitch-900);padding:9px 14px;border-radius:var(--radius-s);cursor:pointer;font-size:13px;font-weight:600;}
+.btn.primary{background:var(--pitch-700);color:#fff;border-color:var(--pitch-700);}
+.btn.primary:hover{background:var(--pitch-600);}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;}
+.note{background:var(--pitch-100);border-radius:var(--radius-s);padding:10px 12px;font-size:12px;color:var(--pitch-900);margin-bottom:14px;line-height:1.6;}
+.status{font-size:13px;margin-top:10px;padding:8px 10px;border-radius:var(--radius-s);display:none;}
+.status.ok{display:block;background:#e4f2e8;color:var(--pitch-700);}
+.status.err{display:block;background:#fbe6e1;color:var(--red);}
+.status.info{display:block;background:#eef2fb;color:#3a4f8a;}
+.lock-screen{max-width:360px;margin:80px auto;text-align:center;}
+.lock-screen h2{font-size:17px;}
+.hidden{display:none;}
+table{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px;}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="club">FC서울 U15</div>
+  <h1>데이터 관리자 페이지</h1>
+</div>
+
+<div class="wrap">
+
+  <div class="lock-screen" id="lock-screen">
+    <div class="card">
+      <h2>관리자 접속 코드 입력</h2>
+      <p style="font-size:13px;color:var(--ink-soft);">Apps Script 속성에 등록한 API_TOKEN을 입력하세요.</p>
+      <div class="field"><input type="password" id="token-input" placeholder="접속 코드"></div>
+      <button class="btn primary" id="btn-unlock" style="width:100%;">입장</button>
+    </div>
+  </div>
+
+  <div id="admin-panel" class="hidden">
+    <div class="note">
+      CSV를 업로드하면 같은 <strong>선수 이름 + 날짜</strong> 조합의 기존 기록은 새 값으로 덮어쓰고, 없는 조합은 새로 추가됩니다.<br>
+      선수 명단은 <strong>이름</strong>이 같으면 기존 정보를 덮어씁니다.
+    </div>
+
+    <div class="card">
+      <h2>1. 데이터 종류 선택</h2>
+      <div class="field">
+        <select id="upload-type">
+          <option value="players">선수 명단 등록/수정</option>
+          <option value="sprint30m">30m 스프린트 (순간 최고속도)</option>
+          <option value="cmj">CMJ 점프</option>
+          <option value="sj">SJ 점프</option>
+          <option value="hamstring">햄스트링 근력</option>
+          <option value="body">신장·체중</option>
+          <option value="mas">GPS 러닝 세션</option>
+        </select>
+      </div>
+      <div class="note" id="template-note"></div>
+      <div class="btn-row">
+        <button class="btn" id="btn-download-template">템플릿 CSV 받기</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2. CSV 업로드</h2>
+      <div class="field"><input type="file" id="upload-file" accept=".csv"></div>
+      <div id="preview-wrap"></div>
+      <div class="btn-row" style="margin-top:12px;">
+        <button class="btn primary" id="btn-do-upload">서버로 전송</button>
+      </div>
+      <div class="status" id="upload-status"></div>
+    </div>
+
+    <div class="card">
+      <h2>연결 상태</h2>
+      <div id="conn-status" style="font-size:13px;color:var(--ink-soft);">확인 중...</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const CONFIG = {
+  // Apps Script 웹 앱 배포 후 나오는 /exec URL을 여기에 붙여넣으세요.
+  API_URL: 'https://script.google.com/macros/s/AKfycbxd-RhXrlcXHtZwtrrDI6sonFPz6FHZ6IRmJSmh_mQFN4yGMrMcUGB6Sb4oQhsHN0Tj/exec'
+};
+
+const HEADERS = {
+  players:   ['이름','학년','포지션','생년월일','출신교','주발'],
+  sprint30m: ['날짜','이름','순간최고속도'],
+  cmj:       ['날짜','이름','점프높이'],
+  sj:        ['날짜','이름','점프높이'],
+  hamstring: ['날짜','이름','좌측근력','우측근력','불균형'],
+  body:      ['날짜','이름','신장','체중'],
+  mas:       ['날짜','이름','포지션','뛴시간','뛴거리','분당거리','최고속도','HSR거리','스프린트거리']
+};
+const EXAMPLES = {
+  players:   ['김시훈','3','CAM','2011-03-24','AAFC충암','R'],
+  sprint30m: ['2026-09-04','김시훈','28.4'],
+  cmj:       ['2026-09-04','김시훈','34.2'],
+  sj:        ['2026-09-04','김시훈','31.0'],
+  hamstring: ['2026-09-04','김시훈','320','305','5'],
+  body:      ['2026-09-04','김시훈','165.2','52.4'],
+  mas:       ['2026-09-04','김시훈','CAM','60','5200','86.6','24.1','320','40']
+};
+
+let TOKEN = localStorage.getItem('fcseoul-admin-token') || '';
+
+function $(id){ return document.getElementById(id); }
+
+$('btn-unlock').onclick = async ()=>{
+  const v = $('token-input').value.trim();
+  if(!v){ return; }
+  TOKEN = v;
+  localStorage.setItem('fcseoul-admin-token', v);
+  enterAdmin();
+};
+
+function enterAdmin(){
+  $('lock-screen').classList.add('hidden');
+  $('admin-panel').classList.remove('hidden');
+  updateTemplateNote();
+  checkConnection();
+}
+
+async function checkConnection(){
+  const el = $('conn-status');
+  if(!CONFIG.API_URL || CONFIG.API_URL.indexOf('PASTE_YOUR')===0){
+    el.textContent = 'API_URL이 설정되지 않았습니다. 코드 상단 CONFIG.API_URL을 채워주세요.';
+    el.style.color = 'var(--red)';
+    return;
+  }
+  try{
+    const res = await fetch(CONFIG.API_URL);
+    const json = await res.json();
+    if(json.ok){
+      const counts = Object.keys(json.data).map(k=>`${k}: ${json.data[k].length}건`).join(' · ');
+      el.textContent = '연결됨 — ' + counts;
+      el.style.color = 'var(--pitch-700)';
+    }else{
+      el.textContent = '연결 오류: ' + json.error;
+      el.style.color = 'var(--red)';
+    }
+  }catch(e){
+    el.textContent = '연결 실패: API_URL을 확인해주세요';
+    el.style.color = 'var(--red)';
+  }
+}
+
+$('upload-type').onchange = updateTemplateNote;
+function updateTemplateNote(){
+  const type = $('upload-type').value;
+  $('template-note').textContent = '필요한 열: ' + HEADERS[type].join(', ');
+  $('upload-status').className = 'status';
+}
+
+$('btn-download-template').onclick = ()=>{
+  const type = $('upload-type').value;
+  const csv = HEADERS[type].join(',') + '\n' + EXAMPLES[type].join(',') + '\n';
+  const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `template_${type}.csv`; a.click();
+  URL.revokeObjectURL(url);
+};
+
+let parsedRows = null;
+$('upload-file').onchange = (e)=>{
+  const file = e.target.files[0];
+  parsedRows = null;
+  $('preview-wrap').innerHTML = '';
+  if(!file) return;
+  Papa.parse(file, {
+    header:true, skipEmptyLines:true, encoding:'UTF-8',
+    complete: (results)=>{
+      parsedRows = results.data;
+      renderPreview(parsedRows);
+    },
+    error: (err)=>{
+      $('upload-status').className = 'status err';
+      $('upload-status').textContent = 'CSV 파싱 오류: ' + err.message;
+    }
+  });
+};
+
+function renderPreview(rows){
+  const type = $('upload-type').value;
+  const headers = HEADERS[type];
+  let html = `<div style="font-size:12px;color:var(--ink-soft);margin-top:10px;">미리보기 (${rows.length}행 중 최대 5행)</div>`;
+  html += '<table><thead><tr>' + headers.map(h=>`<th>${h}</th>`).join('') + '</tr></thead><tbody>';
+  rows.slice(0,5).forEach(r=>{
+    html += '<tr>' + headers.map(h=>`<td>${r[h]!==undefined?r[h]:''}</td>`).join('') + '</tr>';
+  });
+  html += '</tbody></table>';
+  $('preview-wrap').innerHTML = html;
+}
+
+$('btn-do-upload').onclick = async ()=>{
+  const type = $('upload-type').value;
+  const statusEl = $('upload-status');
+  if(!parsedRows || !parsedRows.length){
+    statusEl.className='status err'; statusEl.textContent='CSV 파일을 먼저 선택해주세요.'; return;
+  }
+  const headers = HEADERS[type];
+  const rows = parsedRows.map(r=>{
+    const obj = {};
+    headers.forEach(h=>{ obj[h] = r[h] !== undefined ? r[h] : ''; });
+    return obj;
+  }).filter(r => r['이름']);
+
+  if(!rows.length){
+    statusEl.className='status err'; statusEl.textContent='유효한 행이 없습니다. 열 이름을 템플릿과 맞춰주세요.'; return;
+  }
+
+  statusEl.className='status info'; statusEl.textContent='전송 중...';
+  try{
+    const res = await fetch(CONFIG.API_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'}, // preflight 회피용
+      body: JSON.stringify({token: TOKEN, type, rows})
+    });
+    const json = await res.json();
+    if(json.ok){
+      statusEl.className='status ok';
+      statusEl.textContent = `성공: 신규 ${json.inserted||0}건, 갱신 ${json.updated||0}건`;
+      checkConnection();
+    }else{
+      statusEl.className='status err';
+      statusEl.textContent = '실패: ' + json.error + (json.error==='unauthorized' ? ' (접속 코드가 올바르지 않습니다)' : '');
+    }
+  }catch(e){
+    statusEl.className='status err';
+    statusEl.textContent = '전송 오류: ' + e.message;
+  }
+};
+
+if(TOKEN) enterAdmin();
+</script>
+</body>
+</html>
