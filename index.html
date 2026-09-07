@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FC서울 U15 · 선수 데이터 트래커</title>
+<title>FC서울 유소년 데이터 센터</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
@@ -135,6 +135,7 @@ button, select, input{font-family:inherit;}
 .metric-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 18px;}
 .metric-tab{padding:8px 16px;border-radius:20px;border:1px solid var(--line);background:#fff;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer;}
 .metric-tab:hover{border-color:var(--pitch-600);}
+#btn-add-compare-slot:hover{border-color:var(--pitch-600);color:var(--pitch-700);}
 .metric-tab.active{background:var(--pitch-900);color:#fff;border-color:var(--pitch-900);}
 
 .dark-card{background:var(--pitch-950);border-color:var(--pitch-900);}
@@ -169,7 +170,7 @@ button, select, input{font-family:inherit;}
   <div class="header-top">
     <div class="brand">
       <div class="club">FC서울 U15</div>
-      <h1>선수 피지컬 데이터 트래커</h1>
+      <h1>FC서울 유소년 데이터 센터</h1>
     </div>
     <div class="header-actions">
       <span class="sync-status" id="sync-status">불러오는 중...</span>
@@ -201,12 +202,12 @@ const CONFIG = {
    설정: 지표 정의
 ========================================================= */
 const METRICS = [
+  {key:'height',          label:'신장',                 unit:'cm',  source:'body',      field:'height', higherBetter:true},
+  {key:'weight',          label:'체중',                 unit:'kg',  source:'body',      field:'weight', higherBetter:true},
   {key:'cmj_height',      label:'CMJ (카운터무브먼트)', unit:'cm',  source:'cmj',       field:'value',  higherBetter:true},
   {key:'sj_height',       label:'SJ (스쿼트점프)',      unit:'cm',  source:'sj',        field:'value',  higherBetter:true},
   {key:'sprint_velocity', label:'30m 스프린트',         unit:'km/h',source:'sprint30m', field:'value',  higherBetter:true},
   {key:'gps_mas',         label:'5min MAS',             unit:'m',   source:'mas',       field:'distance', higherBetter:true, note:'5분간 측정한 총 뛴 거리'},
-  {key:'height',          label:'키 / 신장',            unit:'cm',  source:'body',      field:'height', higherBetter:null},
-  {key:'weight',          label:'몸무게 / 체중',        unit:'kg',  source:'body',      field:'weight', higherBetter:null},
   {key:'hamstring',       label:'햄스트링 근력 (좌/우)', unit:'N',  source:'hamstring', isDual:true, fields:['l_force','r_force'], fieldLabels:['좌측(L)','우측(R)'], higherBetter:true},
 ];
 const METRIC_BY_KEY = Object.fromEntries(METRICS.map(m=>[m.key,m]));
@@ -237,6 +238,7 @@ const state = {
   profileDateFrom: '',
   profileDateTo: '',
   compareSlots: null, // [{birthYear, player}, x3] — lazily initialized
+  compareCount: 2, // 화면에 표시할 비교 인원 수 (2~3명)
   rankMetric: 'sprint_velocity',
   rankBirthYear: 'all',
 };
@@ -377,6 +379,29 @@ function metricLatestDual(metricKey, playerName){
   if(!rec) return {l:null, r:null};
   return {l: toNum(rec[m.fields[0]]), r: toNum(rec[m.fields[1]])};
 }
+// best (최대) value ever recorded for a metric — non-dual
+function metricBestValue(metricKey, playerName){
+  const m = METRIC_BY_KEY[metricKey];
+  const series = metricSeries(metricKey, playerName);
+  if(m.isDual){
+    const vals = series.map(s=>{
+      const parts = [s.l, s.r].filter(v=>v!==null);
+      return parts.length ? average(parts) : null;
+    }).filter(v=>v!==null);
+    if(!vals.length) return null;
+    return m.higherBetter===false ? Math.min(...vals) : Math.max(...vals);
+  }
+  const vals = series.map(s=>s.value).filter(v=>v!==null);
+  if(!vals.length) return null;
+  return m.higherBetter===false ? Math.min(...vals) : Math.max(...vals);
+}
+// best L/R ever recorded — dual metrics only
+function metricBestDual(metricKey, playerName){
+  const series = metricSeries(metricKey, playerName);
+  const ls = series.map(s=>s.l).filter(v=>v!==null);
+  const rs = series.map(s=>s.r).filter(v=>v!==null);
+  return { l: ls.length ? Math.max(...ls) : null, r: rs.length ? Math.max(...rs) : null };
+}
 // full time series: single metrics -> [{date,value}], dual -> [{date,l,r}]
 function metricSeries(metricKey, playerName){
   const m = METRIC_BY_KEY[metricKey];
@@ -448,6 +473,15 @@ function teamTemplate(){
     if(rows.length){
       best = rows.slice().sort((a,b)=> metric.higherBetter===false ? a.value-b.value : b.value-a.value)[0];
     }
+    // 값이 높은 선수부터 내림차순 정렬 (값 없는 선수는 맨 아래)
+    const rowMap = Object.fromEntries(rows.map(r=>[r.name, r.value]));
+    const sortedPlayers = players.slice().sort((a,b)=>{
+      const va = rowMap[a.name], vb = rowMap[b.name];
+      if(va===undefined && vb===undefined) return 0;
+      if(va===undefined) return 1;
+      if(vb===undefined) return -1;
+      return metric.higherBetter===false ? va-vb : vb-va;
+    });
     bodyHtml = `
       <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);">
         <div class="kpi-card"><div class="label">그룹 평균</div><div class="num">${fmtNum(avg)}<span>${metric.unit}</span></div></div>
@@ -455,10 +489,9 @@ function teamTemplate(){
         <div class="kpi-card"><div class="label">분석 팁</div><div style="font-size:13px;color:var(--ink-soft);line-height:1.5;">${METRIC_TIPS[state.teamMetric]||''}</div></div>
       </div>
       <div class="card">
-        <h3>선수별 ${metric.label}</h3>
-        ${players.length ? players.map(p=>{
-          const row = rows.find(r=>r.name===p.name);
-          const val = row ? row.value : null;
+        <h3>선수별 ${metric.label} (높은 순)</h3>
+        ${sortedPlayers.length ? sortedPlayers.map(p=>{
+          const val = rowMap[p.name] !== undefined ? rowMap[p.name] : null;
           const pct = val!==null ? Math.max((val/maxV*100), 3) : 0;
           return `<div class="rank-row">
             <div class="rank-name">${p.name}<div class="rank-pos">${p.position||''}</div></div>
@@ -469,8 +502,17 @@ function teamTemplate(){
       </div>
     `;
   } else {
-    // 햄스트링: 좌/우 동시 표시
-    const dualRows = players.map(p=>({name:p.name, ...metricLatestDual(state.teamMetric, p.name)}));
+    // 햄스트링: 좌/우 동시 표시, 평균값 기준 내림차순 정렬
+    let dualRows = players.map(p=>({name:p.name, ...metricLatestDual(state.teamMetric, p.name)}));
+    dualRows.sort((a,b)=>{
+      const parts_a = [a.l,a.r].filter(v=>v!==null), parts_b=[b.l,b.r].filter(v=>v!==null);
+      const va = parts_a.length ? average(parts_a) : null;
+      const vb = parts_b.length ? average(parts_b) : null;
+      if(va===null && vb===null) return 0;
+      if(va===null) return 1;
+      if(vb===null) return -1;
+      return vb-va;
+    });
     const lVals = dualRows.map(r=>r.l).filter(v=>v!==null);
     const rVals = dualRows.map(r=>r.r).filter(v=>v!==null);
     const avgL = average(lVals), avgR = average(rVals);
@@ -487,7 +529,7 @@ function teamTemplate(){
         <div class="kpi-card"><div class="label">분석 팁</div><div style="font-size:13px;color:var(--ink-soft);line-height:1.5;">${METRIC_TIPS[state.teamMetric]||''}</div></div>
       </div>
       <div class="card">
-        <h3>선수별 햄스트링 근력 (좌 / 우)</h3>
+        <h3>선수별 햄스트링 근력 (좌 / 우, 평균 높은 순)</h3>
         <div class="chart-wrap tall"><canvas id="chart-team-hamstring"></canvas></div>
       </div>
     `;
@@ -519,7 +561,7 @@ function profileTemplate(){
 
   const rows = METRICS.map(m=>{
     if(m.isDual){
-      const d = metricLatestDual(m.key, p.name);
+      const d = metricBestDual(m.key, p.name);
       const teamVals = teamValuesForMetric(m.key, DATA.players).map(r=>r.value);
       const avg = average(teamVals);
       const val = (d.l!==null||d.r!==null) ? average([d.l,d.r].filter(v=>v!==null)) : null;
@@ -531,7 +573,7 @@ function profileTemplate(){
       const valLabel = (d.l===null&&d.r===null) ? '–' : `L ${fmtNum(d.l)} / R ${fmtNum(d.r)} ${m.unit}`;
       return `<tr><td>${m.label}</td><td>${valLabel}</td><td>${avg===null?'–':fmtNum(avg)+' '+m.unit}</td><td>${diffHtml}</td></tr>`;
     }
-    const val = metricLatestValue(m.key, p.name);
+    const val = metricBestValue(m.key, p.name);
     const teamVals = teamValuesForMetric(m.key, DATA.players).map(r=>r.value);
     const avg = average(teamVals);
     let diffHtml = '–';
@@ -579,13 +621,13 @@ function profileTemplate(){
 
     <div class="grid-2">
       <div class="card">
-        <h3>종합 역량 레이더 (팀 내 상대 위치)</h3>
+        <h3>종합 역량 레이더 (팀 평균 = 100 기준, 내 최고 기록)</h3>
         <div class="chart-wrap"><canvas id="chart-profile-radar"></canvas></div>
       </div>
       <div class="card">
-        <h3>지표별 최신 기록 vs 팀 평균</h3>
+        <h3>지표별 최대 기록 vs 팀 평균</h3>
         <table class="metric-table">
-          <thead><tr><th>지표</th><th>최신 기록</th><th>팀 평균</th><th>차이</th></tr></thead>
+          <thead><tr><th>지표</th><th>최대 기록</th><th>팀 평균</th><th>차이</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -593,7 +635,7 @@ function profileTemplate(){
 
     <div class="card dark-card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
-        <h3 style="color:#fff;margin:0;">📈 날짜별 데이터 추적관찰</h3>
+        <h3 style="color:#fff;margin:0;">📈 데이터 추적관찰</h3>
         <div style="display:flex;gap:8px;align-items:center;">
           <label style="font-size:12px;color:rgba(255,255,255,.7);">추적 지표</label>
           <select id="profile-metric-select" class="dark-select">
@@ -623,14 +665,16 @@ function ensureCompareSlots(){
 }
 function compareTemplate(){
   ensureCompareSlots();
+  const visibleSlots = state.compareSlots.slice(0, state.compareCount);
 
-  const slotsHtml = state.compareSlots.map((slot, idx)=>{
+  const slotsHtml = visibleSlots.map((slot, idx)=>{
     const players = playersFiltered(slot.birthYear);
     if(!slot.player || !players.find(pl=>pl.name===slot.player)){
       slot.player = players[0] ? players[0].name : null;
     }
     const label = idx===0 ? '기준 선수 A' : `비교 선수 ${String.fromCharCode(65+idx)}`;
     const color = PALETTE[idx % PALETTE.length];
+    const canRemove = idx===state.compareCount-1 && state.compareCount>2;
     return `
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -638,6 +682,7 @@ function compareTemplate(){
           <div style="display:flex;gap:6px;align-items:center;">
             <label style="font-size:12px;color:var(--ink-soft);">연도</label>
             <select data-slot="${idx}" class="compare-year-select">${birthYearOptions(slot.birthYear)}</select>
+            ${canRemove ? `<button class="btn" id="btn-remove-compare-slot" style="padding:5px 9px;font-size:12px;background:var(--pitch-100);color:var(--pitch-900);border-color:var(--line);">✕</button>` : ''}
           </div>
         </div>
         <select data-slot="${idx}" class="compare-player-select" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:4px;font-size:13px;">
@@ -646,7 +691,12 @@ function compareTemplate(){
       </div>`;
   }).join('');
 
-  const selectedPlayers = state.compareSlots.map(s=>s.player).filter(Boolean);
+  const addSlotHtml = state.compareCount<3 ? `
+    <button class="card" id="btn-add-compare-slot" style="display:flex;align-items:center;justify-content:center;cursor:pointer;border:1px dashed var(--line);color:var(--ink-soft);font-size:13px;font-weight:600;background:transparent;min-height:96px;">
+      + 비교 선수 추가 (최대 3명)
+    </button>` : '';
+
+  const selectedPlayers = visibleSlots.map(s=>s.player).filter(Boolean);
 
   const metaFields = [['birthdate','생년월일'],['school','출신교'],['dominant_foot','주사용 발']];
   const metaRows = metaFields.map(([f,label])=>{
@@ -673,7 +723,7 @@ function compareTemplate(){
   }).join('');
 
   return `
-    <div class="grid-3">${slotsHtml}</div>
+    <div class="${state.compareCount===2 ? 'grid-2' : 'grid-3'}">${slotsHtml}${addSlotHtml}</div>
 
     <div class="card">
       <h3>피지컬 &amp; 운동능력 레이더 비교</h3>
@@ -761,6 +811,12 @@ function attachHandlers(){
       render();
     };
   });
+  if(byId('btn-add-compare-slot')) byId('btn-add-compare-slot').onclick = ()=>{
+    if(state.compareCount<3){ state.compareCount++; render(); }
+  };
+  if(byId('btn-remove-compare-slot')) byId('btn-remove-compare-slot').onclick = ()=>{
+    if(state.compareCount>2){ state.compareCount--; render(); }
+  };
 
   if(byId('rank-metric-select')) byId('rank-metric-select').onchange = e=>{state.rankMetric=e.target.value; render();};
   if(byId('rank-birthyear')) byId('rank-birthyear').onchange = e=>{state.rankBirthYear=e.target.value; render();};
@@ -801,7 +857,16 @@ function drawTeamCharts(){
   if(!metric.isDual) return; // 단일 지표는 DOM 막대로 표시(차트 불필요)
 
   const players = playersFiltered(state.teamBirthYear);
-  const dualRows = players.map(p=>({name:p.name, ...metricLatestDual(state.teamMetric, p.name)}));
+  let dualRows = players.map(p=>({name:p.name, ...metricLatestDual(state.teamMetric, p.name)}));
+  dualRows.sort((a,b)=>{
+    const parts_a = [a.l,a.r].filter(v=>v!==null), parts_b=[b.l,b.r].filter(v=>v!==null);
+    const va = parts_a.length ? average(parts_a) : null;
+    const vb = parts_b.length ? average(parts_b) : null;
+    if(va===null && vb===null) return 0;
+    if(va===null) return 1;
+    if(vb===null) return -1;
+    return vb-va;
+  });
   const ctx = document.getElementById('chart-team-hamstring');
   if(!ctx) return;
   destroyChart('team-hamstring');
@@ -825,8 +890,8 @@ function drawProfileCharts(){
   const labels = PROFILE_RADAR_KEYS.map(k=>METRIC_BY_KEY[k].label);
   const scores = PROFILE_RADAR_KEYS.map(k=>{
     const mm = METRIC_BY_KEY[k];
-    const val = metricLatestValue(k, p.name);
-    const allVals = teamValuesForMetric(k, DATA.players).map(r=>r.value);
+    const val = metricBestValue(k, p.name); // 팀 평균을 기준으로, 내 '최고' 기록이 어디쯤인지
+    const allVals = teamValuesForMetric(k, DATA.players).map(r=>r.value); // 팀 평균 분포(최신 기록 기준)
     return percentileScore(val, allVals, mm.higherBetter);
   });
   const ctxR = document.getElementById('chart-profile-radar');
@@ -875,7 +940,7 @@ function drawProfileCharts(){
 
 function drawCompareCharts(){
   ensureCompareSlots();
-  const names = state.compareSlots.map(s=>s.player).filter(Boolean);
+  const names = state.compareSlots.slice(0, state.compareCount).map(s=>s.player).filter(Boolean);
   const labels = PROFILE_RADAR_KEYS.map(k=>METRIC_BY_KEY[k].label);
   const datasets = names.map((name,i)=>{
     const scores = PROFILE_RADAR_KEYS.map(k=>{
