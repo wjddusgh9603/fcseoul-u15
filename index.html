@@ -98,6 +98,7 @@ button, select, input{font-family:inherit;}
 .avatar-badge{
   width:64px;height:64px;border-radius:50%;background:var(--pitch-700);color:#fff;
   display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;flex-shrink:0;
+  object-fit:cover;
 }
 .profile-meta{display:flex;flex-direction:column;gap:4px;}
 .profile-meta h2{margin:0;font-size:20px;}
@@ -234,9 +235,6 @@ const state = {
   teamMetric: 'cmj_height',
   profileBirthYear: 'all',
   profilePlayer: null,
-  profileMetric: 'height',
-  profileDateFrom: '',
-  profileDateTo: '',
   compareSlots: null, // [{birthYear, player}, x3] — lazily initialized
   compareCount: 2, // 화면에 표시할 비교 인원 수 (2~3명)
   rankMetric: 'sprint_velocity',
@@ -264,7 +262,8 @@ async function loadData(){
       let byear = null; const m = String(birthdate).match(/^(\d{4})/); if(m) byear = parseInt(m[1]);
       return {
         name: norm(r['이름']), grade: toNum(r['학년']), position: norm(r['포지션']),
-        birthdate, birth_year: byear, school: norm(r['출신교']), dominant_foot: norm(r['주발'])
+        birthdate, birth_year: byear, school: norm(r['출신교']), dominant_foot: norm(r['주발']),
+        photo: norm(r['사진']) || null
       };
     }).filter(p=>p.name);
 
@@ -319,6 +318,27 @@ function fmtNum(v, digits=1){
   return Number(v).toLocaleString('ko-KR',{minimumFractionDigits:0,maximumFractionDigits:digits});
 }
 function nameKey(n){ return norm(n).replace(/^(서울U15|서울)\s*/,''); }
+// 구글 드라이브 "공유" 링크를 이미지로 바로 볼 수 있는 링크로 자동 변환 (사용자가 원본 공유링크를 그대로 붙여넣어도 동작하도록)
+function driveViewUrl(url){
+  if(!url) return url;
+  const m = url.match(/drive\.google\.com\/file\/d\/([^/]+)/) || url.match(/[?&]id=([^&]+)/);
+  if(m && m[1]) return `https://drive.google.com/uc?export=view&id=${m[1]}`;
+  return url;
+}
+function playerAvatarHtml(p){
+  const initial = p.name.slice(0,1);
+  if(p.photo){
+    const src = driveViewUrl(p.photo);
+    return `<img src="${src}" class="avatar-badge" alt="${p.name}" onerror="avatarFallback(this,'${initial}')">`;
+  }
+  return `<div class="avatar-badge">${initial}</div>`;
+}
+function avatarFallback(imgEl, initial){
+  const div = document.createElement('div');
+  div.className = 'avatar-badge';
+  div.textContent = initial;
+  imgEl.replaceWith(div);
+}
 function calcAge(birthdate){
   if(!birthdate) return null;
   const b = new Date(birthdate);
@@ -424,9 +444,31 @@ function metricBestDual(metricKey, playerName){
   const rs = series.map(s=>s.r).filter(v=>v!==null);
   return { l: ls.length ? Math.max(...ls) : null, r: rs.length ? Math.max(...rs) : null };
 }
+function monthKey(dateStr){ return dateStr ? String(dateStr).slice(0,7) : null; } // 'YYYY-MM'
+// 신장/체중은 한 달에 여러 번 측정되는 경우가 많아, 월별 평균으로 묶어서 사용
+function bodyMonthlySeries(playerName){
+  const recs = allRecords('body', playerName);
+  const byMonth = {};
+  recs.forEach(r=>{
+    const mk = monthKey(r.date);
+    if(!mk) return;
+    if(!byMonth[mk]) byMonth[mk] = {height:[], weight:[]};
+    const h = toNum(r.height), w = toNum(r.weight);
+    if(h!==null) byMonth[mk].height.push(h);
+    if(w!==null) byMonth[mk].weight.push(w);
+  });
+  return Object.keys(byMonth).sort().map(mk=>({
+    date: mk + '-01',
+    height: byMonth[mk].height.length ? average(byMonth[mk].height) : null,
+    weight: byMonth[mk].weight.length ? average(byMonth[mk].weight) : null,
+  }));
+}
 // full time series: single metrics -> [{date,value}], dual -> [{date,l,r}]
 function metricSeries(metricKey, playerName){
   const m = METRIC_BY_KEY[metricKey];
+  if(m.source === 'body'){
+    return bodyMonthlySeries(playerName).map(r=>({date:r.date, value:r[m.field]})).filter(r=>r.value!==null);
+  }
   const recs = allRecords(m.source, playerName);
   if(m.isDual){
     return recs.map(r=>({date:r.date, l:toNum(r[m.fields[0]]), r:toNum(r[m.fields[1]])})).filter(r=>r.l!==null || r.r!==null);
@@ -434,7 +476,7 @@ function metricSeries(metricKey, playerName){
   return recs.map(r=>({date:r.date, value:toNum(r[m.field])})).filter(r=>r.value!==null);
 }
 function teamValuesForMetric(metricKey, playerList){
-  return playerList.map(p=>({name:p.name, position:p.position, value: metricLatestValue(metricKey, p.name)})).filter(r=>r.value!==null);
+  return playerList.map(p=>({name:p.name, position:p.position, value: metricBestValue(metricKey, p.name)})).filter(r=>r.value!==null);
 }
 function average(arr){ if(!arr.length) return null; return arr.reduce((a,b)=>a+b,0)/arr.length; }
 function percentileScore(value, allValues, higherBetter){
@@ -525,7 +567,7 @@ function teamTemplate(){
     `;
   } else {
     // 햄스트링: 좌/우 동시 표시, 평균값 기준 내림차순 정렬
-    let dualRows = players.map(p=>({name:p.name, ...metricLatestDual(state.teamMetric, p.name)}));
+    let dualRows = players.map(p=>({name:p.name, ...metricBestDual(state.teamMetric, p.name)}));
     dualRows.sort((a,b)=>{
       const parts_a = [a.l,a.r].filter(v=>v!==null), parts_b=[b.l,b.r].filter(v=>v!==null);
       const va = parts_a.length ? average(parts_a) : null;
@@ -608,15 +650,6 @@ function profileTemplate(){
     return `<tr><td>${m.label}</td><td>${val===null?'–':fmtNum(val)+' '+m.unit}</td><td>${avg===null?'–':fmtNum(avg)+' '+m.unit}</td><td>${diffHtml}</td></tr>`;
   }).join('');
 
-  // trend section setup
-  const trendMetric = METRIC_BY_KEY[state.profileMetric];
-  const fullSeries = metricSeries(state.profileMetric, p.name);
-  const seriesDates = fullSeries.map(s=>s.date).sort();
-  const minDate = seriesDates[0] || '';
-  const maxDate = seriesDates[seriesDates.length-1] || '';
-  if(!state.profileDateFrom) state.profileDateFrom = minDate;
-  if(!state.profileDateTo) state.profileDateTo = maxDate;
-
   return `
     <div class="filter-row">
       <label>출생년도</label>
@@ -628,7 +661,7 @@ function profileTemplate(){
     </div>
 
     <div class="card profile-head">
-      <div class="avatar-badge">${p.name.slice(0,1)}</div>
+      ${playerAvatarHtml(p)}
       <div class="profile-meta">
         <h2>${p.name}</h2>
         <div class="sub">
@@ -653,27 +686,6 @@ function profileTemplate(){
           <tbody>${rows}</tbody>
         </table>
       </div>
-    </div>
-
-    <div class="card dark-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
-        <h3 style="color:#fff;margin:0;">📈 데이터 추적관찰</h3>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <label style="font-size:12px;color:rgba(255,255,255,.7);">추적 지표</label>
-          <select id="profile-metric-select" class="dark-select">
-            ${METRICS.map(m=>`<option value="${m.key}" ${m.key===state.profileMetric?'selected':''}>${m.label}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 10px;flex-wrap:wrap;gap:10px;">
-        <div style="color:#ff8a75;font-weight:700;font-size:14px;">${trendMetric.label} 추이 (${trendMetric.unit})</div>
-        <div style="display:flex;gap:6px;align-items:center;font-size:12px;color:rgba(255,255,255,.65);">
-          <input type="date" id="profile-date-from" value="${state.profileDateFrom}" class="dark-select" ${minDate?'':'disabled'}>
-          <span>~</span>
-          <input type="date" id="profile-date-to" value="${state.profileDateTo}" class="dark-select" ${maxDate?'':'disabled'}>
-        </div>
-      </div>
-      <div class="chart-wrap tall"><canvas id="chart-profile-trend"></canvas></div>
     </div>
   `;
 }
@@ -732,13 +744,13 @@ function compareTemplate(){
   const metricRows = METRICS.map(m=>{
     if(m.isDual){
       const cells = selectedPlayers.map(name=>{
-        const d = metricLatestDual(m.key, name);
+        const d = metricBestDual(m.key, name);
         return `<td>${d.l===null && d.r===null ? '–' : `L ${fmtNum(d.l)} / R ${fmtNum(d.r)} ${m.unit}`}</td>`;
       }).join('');
       return `<tr><td>${m.label}</td>${cells}</tr>`;
     }
     const cells = selectedPlayers.map(name=>{
-      const v = metricLatestValue(m.key, name);
+      const v = metricBestValue(m.key, name);
       return `<td>${v===null?'–':fmtNum(v)+' '+m.unit}</td>`;
     }).join('');
     return `<tr><td>${m.label}</td>${cells}</tr>`;
@@ -813,10 +825,7 @@ function attachHandlers(){
     btn.onclick = ()=>{ state.teamMetric = btn.dataset.metric; render(); };
   });
   if(byId('profile-birthyear')) byId('profile-birthyear').onchange = e=>{state.profileBirthYear=e.target.value; state.profilePlayer=null; render();};
-  if(byId('profile-player-select')) byId('profile-player-select').onchange = e=>{state.profilePlayer=e.target.value; state.profileDateFrom=''; state.profileDateTo=''; render();};
-  if(byId('profile-metric-select')) byId('profile-metric-select').onchange = e=>{state.profileMetric=e.target.value; state.profileDateFrom=''; state.profileDateTo=''; render();};
-  if(byId('profile-date-from')) byId('profile-date-from').onchange = e=>{state.profileDateFrom=e.target.value; drawProfileCharts();};
-  if(byId('profile-date-to')) byId('profile-date-to').onchange = e=>{state.profileDateTo=e.target.value; drawProfileCharts();};
+  if(byId('profile-player-select')) byId('profile-player-select').onchange = e=>{state.profilePlayer=e.target.value; render();};
 
   document.querySelectorAll('.compare-year-select').forEach(sel=>{
     sel.onchange = ()=>{
@@ -895,7 +904,7 @@ function drawTeamCharts(){
   if(!metric.isDual) return; // 단일 지표는 DOM 막대로 표시(차트 불필요)
 
   const players = playersFiltered(state.teamBirthYear);
-  let dualRows = players.map(p=>({name:p.name, ...metricLatestDual(state.teamMetric, p.name)}));
+  let dualRows = players.map(p=>({name:p.name, ...metricBestDual(state.teamMetric, p.name)}));
   dualRows.sort((a,b)=>{
     const parts_a = [a.l,a.r].filter(v=>v!==null), parts_b=[b.l,b.r].filter(v=>v!==null);
     const va = parts_a.length ? average(parts_a) : null;
@@ -941,39 +950,6 @@ function drawProfileCharts(){
       options:{responsive:true, maintainAspectRatio:false, scales:{r:{min:0,max:100,ticks:{stepSize:25,backdropColor:'transparent'},pointLabels:{font:{size:11}}}}, plugins:{legend:{display:false}}}
     }, 'profile-radar');
   }
-
-  // trend chart (metric + date range selectable)
-  const m = METRIC_BY_KEY[state.profileMetric];
-  let series = metricSeries(state.profileMetric, p.name);
-  if(state.profileDateFrom) series = series.filter(s=>s.date >= state.profileDateFrom);
-  if(state.profileDateTo)   series = series.filter(s=>s.date <= state.profileDateTo);
-
-  const ctxT = document.getElementById('chart-profile-trend');
-  if(!ctxT) return;
-  destroyChart('profile-trend');
-  if(!series.length){
-    ctxT.parentElement.innerHTML = '<div class="empty" style="color:rgba(255,255,255,.6);">해당 기간의 기록이 없습니다.</div>';
-    return;
-  }
-  if(m.isDual){
-    safeCreateChart(ctxT, {
-      type:'line',
-      data:{
-        labels: series.map(s=>s.date),
-        datasets:[
-          {label:'좌측(L)', data:cleanNums(series.map(s=>s.l)), borderColor:HAM_COLORS[0], backgroundColor:HAM_COLORS[0]+'22', fill:false, tension:.3, pointRadius:3, spanGaps:true},
-          {label:'우측(R)', data:cleanNums(series.map(s=>s.r)), borderColor:HAM_COLORS[1], backgroundColor:HAM_COLORS[1]+'22', fill:false, tension:.3, pointRadius:3, spanGaps:true}
-        ]
-      },
-      options: darkChartOpts({plugins:{legend:{display:true}}})
-    }, 'profile-trend');
-  } else {
-    safeCreateChart(ctxT, {
-      type:'line',
-      data:{labels:series.map(s=>s.date), datasets:[{data:cleanNums(series.map(s=>s.value)), borderColor:'#ff5a4a', backgroundColor:'rgba(255,90,74,.15)', fill:true, tension:.3, pointRadius:3, spanGaps:true}]},
-      options: darkChartOpts({plugins:{legend:{display:false}}})
-    }, 'profile-trend');
-  }
 }
 
 function drawCompareCharts(){
@@ -983,7 +959,7 @@ function drawCompareCharts(){
   const datasets = names.map((name,i)=>{
     const scores = PROFILE_RADAR_KEYS.map(k=>{
       const mm = METRIC_BY_KEY[k];
-      const val = metricLatestValue(k, name);
+      const val = metricBestValue(k, name);
       const allVals = teamValuesForMetric(k, DATA.players).map(r=>r.value);
       return percentileScore(val, allVals, mm.higherBetter);
     });
