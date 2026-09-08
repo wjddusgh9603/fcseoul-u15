@@ -6,7 +6,7 @@
 <title>FC서울 유소년 데이터 센터</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <style>
 :root{
   --pitch-950:#0c1a12;
@@ -259,7 +259,8 @@ async function loadData(){
     const raw = json.data;
 
     const players = (raw.players||[]).map(r=>{
-      const birthdate = norm(r['생년월일']);
+      const birthdateRaw = norm(r['생년월일']);
+      const birthdate = parseFlexibleDate(birthdateRaw) || birthdateRaw; // ISO 타임스탬프여도 날짜만 남김
       let byear = null; const m = String(birthdate).match(/^(\d{4})/); if(m) byear = parseInt(m[1]);
       return {
         name: norm(r['이름']), grade: toNum(r['학년']), position: norm(r['포지션']),
@@ -304,7 +305,8 @@ function parseFlexibleDate(raw){
   if(!raw) return null;
   let s = String(raw).trim();
   let m;
-  if(m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
+  // ISO 날짜/시간 문자열(예: 2011-09-23T15:00:00.000Z)이 그대로 넘어온 경우 날짜 부분만 취함
+  if(m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
   if(m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)) return `${m[3]}-${pad(m[2])}-${pad(m[1])}`;
   if(m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/)) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
   if(m = s.match(/^(\d{2})\.\s*(\d{1,2})\.\s*(\d{1,2})\.?$/)) return `20${m[1]}-${pad(m[2])}-${pad(m[3])}`;
@@ -334,6 +336,26 @@ function showToast(msg){
   t._timer = setTimeout(()=>t.classList.remove('show'), 2600);
 }
 function destroyChart(id){ if(charts[id]){ charts[id].destroy(); delete charts[id]; } }
+// non-finite (NaN/Infinity) 값은 null로 치환 — Chart.js가 끊긴 구간으로 처리하고 죽지 않게 함
+function cleanNums(arr){ return arr.map(v => (typeof v==='number' && Number.isFinite(v)) ? v : null); }
+// Chart.js 생성을 감싸서, 실패 시 콘솔이 아니라 화면에 바로 원인을 보여줌 (사용자가 캡처해서 알려줄 수 있도록)
+function safeCreateChart(canvasEl, config, chartId){
+  try{
+    charts[chartId] = new Chart(canvasEl, config);
+    return charts[chartId];
+  }catch(e){
+    console.error('차트 생성 실패 [' + chartId + ']:', e);
+    const wrap = canvasEl.closest('.chart-wrap') || canvasEl.parentElement;
+    if(wrap) wrap.innerHTML = `<div class="empty" style="color:inherit;">차트를 그리지 못했습니다.<br><span style="font-size:11px;opacity:.7;">${(e && e.message) ? e.message : e}</span></div>`;
+    return null;
+  }
+}
+window.addEventListener('error', function(e){
+  console.error('전역 오류:', e.error || e.message);
+});
+window.addEventListener('unhandledrejection', function(e){
+  console.error('처리되지 않은 Promise 오류:', e.reason);
+});
 
 const PALETTE = ['#c0392b', '#e08e2d', '#3a6ea5'];
 
@@ -846,10 +868,26 @@ function darkChartOpts(extra={}){
   }, extra);
 }
 
+function chartLibReady(){
+  if(typeof Chart === 'undefined'){
+    console.error('Chart.js가 로드되지 않았습니다 (네트워크 차단 또는 광고 차단 프로그램일 수 있습니다)');
+    document.querySelectorAll('.chart-wrap').forEach(el=>{
+      if(!el.querySelector('canvas')) return; // already replaced
+      el.innerHTML = '<div class="empty" style="color:inherit;">차트를 불러오지 못했습니다. 인터넷 연결 또는 광고 차단(애드블록) 확장 프로그램을 확인한 뒤 새로고침해주세요.</div>';
+    });
+    return false;
+  }
+  return true;
+}
 function drawCharts(){
-  if(state.tab==='team') drawTeamCharts();
-  else if(state.tab==='profile') drawProfileCharts();
-  else if(state.tab==='compare') drawCompareCharts();
+  if(!chartLibReady()) return;
+  try{
+    if(state.tab==='team') drawTeamCharts();
+    else if(state.tab==='profile') drawProfileCharts();
+    else if(state.tab==='compare') drawCompareCharts();
+  }catch(e){
+    console.error('차트 렌더링 오류:', e);
+  }
 }
 
 function drawTeamCharts(){
@@ -870,17 +908,17 @@ function drawTeamCharts(){
   const ctx = document.getElementById('chart-team-hamstring');
   if(!ctx) return;
   destroyChart('team-hamstring');
-  charts['team-hamstring'] = new Chart(ctx, {
+  safeCreateChart(ctx, {
     type:'bar',
     data:{
       labels: dualRows.map(r=>r.name),
       datasets:[
-        {label:'좌측(L)', data:dualRows.map(r=>r.l), backgroundColor:HAM_COLORS[0], borderRadius:3},
-        {label:'우측(R)', data:dualRows.map(r=>r.r), backgroundColor:HAM_COLORS[1], borderRadius:3}
+        {label:'좌측(L)', data:cleanNums(dualRows.map(r=>r.l)), backgroundColor:HAM_COLORS[0], borderRadius:3},
+        {label:'우측(R)', data:cleanNums(dualRows.map(r=>r.r)), backgroundColor:HAM_COLORS[1], borderRadius:3}
       ]
     },
     options: baseChartOpts({plugins:{legend:{display:true}, tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${fmtNum(c.parsed.y)} N`}}}})
-  });
+  }, 'team-hamstring');
 }
 
 function drawProfileCharts(){
@@ -897,11 +935,11 @@ function drawProfileCharts(){
   const ctxR = document.getElementById('chart-profile-radar');
   if(ctxR){
     destroyChart('profile-radar');
-    charts['profile-radar'] = new Chart(ctxR,{
+    safeCreateChart(ctxR,{
       type:'radar',
-      data:{labels, datasets:[{label:p.name, data:scores, backgroundColor:'rgba(44,122,73,.25)', borderColor:'#2c7a49', pointBackgroundColor:'#2c7a49'}]},
+      data:{labels, datasets:[{label:p.name, data:cleanNums(scores), backgroundColor:'rgba(44,122,73,.25)', borderColor:'#2c7a49', pointBackgroundColor:'#2c7a49'}]},
       options:{responsive:true, maintainAspectRatio:false, scales:{r:{min:0,max:100,ticks:{stepSize:25,backdropColor:'transparent'},pointLabels:{font:{size:11}}}}, plugins:{legend:{display:false}}}
-    });
+    }, 'profile-radar');
   }
 
   // trend chart (metric + date range selectable)
@@ -918,23 +956,23 @@ function drawProfileCharts(){
     return;
   }
   if(m.isDual){
-    charts['profile-trend'] = new Chart(ctxT, {
+    safeCreateChart(ctxT, {
       type:'line',
       data:{
         labels: series.map(s=>s.date),
         datasets:[
-          {label:'좌측(L)', data:series.map(s=>s.l), borderColor:HAM_COLORS[0], backgroundColor:HAM_COLORS[0]+'22', fill:false, tension:.3, pointRadius:3},
-          {label:'우측(R)', data:series.map(s=>s.r), borderColor:HAM_COLORS[1], backgroundColor:HAM_COLORS[1]+'22', fill:false, tension:.3, pointRadius:3}
+          {label:'좌측(L)', data:cleanNums(series.map(s=>s.l)), borderColor:HAM_COLORS[0], backgroundColor:HAM_COLORS[0]+'22', fill:false, tension:.3, pointRadius:3, spanGaps:true},
+          {label:'우측(R)', data:cleanNums(series.map(s=>s.r)), borderColor:HAM_COLORS[1], backgroundColor:HAM_COLORS[1]+'22', fill:false, tension:.3, pointRadius:3, spanGaps:true}
         ]
       },
       options: darkChartOpts({plugins:{legend:{display:true}}})
-    });
+    }, 'profile-trend');
   } else {
-    charts['profile-trend'] = new Chart(ctxT, {
+    safeCreateChart(ctxT, {
       type:'line',
-      data:{labels:series.map(s=>s.date), datasets:[{data:series.map(s=>s.value), borderColor:'#ff5a4a', backgroundColor:'rgba(255,90,74,.15)', fill:true, tension:.3, pointRadius:3}]},
+      data:{labels:series.map(s=>s.date), datasets:[{data:cleanNums(series.map(s=>s.value)), borderColor:'#ff5a4a', backgroundColor:'rgba(255,90,74,.15)', fill:true, tension:.3, pointRadius:3, spanGaps:true}]},
       options: darkChartOpts({plugins:{legend:{display:false}}})
-    });
+    }, 'profile-trend');
   }
 }
 
@@ -950,12 +988,12 @@ function drawCompareCharts(){
       return percentileScore(val, allVals, mm.higherBetter);
     });
     const color = PALETTE[i % PALETTE.length];
-    return {label:name, data:scores, backgroundColor:color+'26', borderColor:color, pointBackgroundColor:color};
+    return {label:name, data:cleanNums(scores), backgroundColor:color+'26', borderColor:color, pointBackgroundColor:color};
   });
   const ctxR = document.getElementById('chart-compare-radar');
   if(ctxR){
     destroyChart('compare-radar');
-    charts['compare-radar'] = new Chart(ctxR,{type:'radar',data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,scales:{r:{min:0,max:100,ticks:{stepSize:25,backdropColor:'transparent'},pointLabels:{font:{size:11}}}}}});
+    safeCreateChart(ctxR,{type:'radar',data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,scales:{r:{min:0,max:100,ticks:{stepSize:25,backdropColor:'transparent'},pointLabels:{font:{size:11}}}}}}, 'compare-radar');
   }
 }
 
