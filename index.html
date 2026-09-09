@@ -328,15 +328,28 @@ function driveViewUrl(url){
   if(m && m[1]) return `https://drive.google.com/uc?export=view&id=${m[1]}`;
   return url;
 }
+const PHOTO_EXTS = ['jpg','jpeg','png','webp']; // GitHub photos/ 폴더에서 순서대로 시도할 확장자
 function playerAvatarHtml(p){
   const initial = p.name.slice(0,1);
+  // 시트에 사진 링크가 따로 있으면 그걸 우선 사용(구글 드라이브 링크 자동 변환),
+  // 없으면 GitHub 저장소의 photos/선수이름.[jpg|jpeg|png|webp] 규칙을 순서대로 시도
   if(p.photo){
     const src = driveViewUrl(p.photo);
     return `<img src="${src}" class="avatar-badge" alt="${p.name}" onerror="avatarFallback(this,'${initial}')">`;
   }
-  return `<div class="avatar-badge">${initial}</div>`;
+  const base = `photos/${encodeURIComponent(p.name)}`;
+  const src = `${base}.${PHOTO_EXTS[0]}`;
+  return `<img src="${src}" class="avatar-badge" alt="${p.name}" data-photo-base="${base}" data-ext-idx="0" onerror="avatarFallback(this,'${initial}')">`;
 }
 function avatarFallback(imgEl, initial){
+  const base = imgEl.dataset.photoBase;
+  let idx = parseInt(imgEl.dataset.extIdx || '-1', 10);
+  if(base && idx>=0 && idx < PHOTO_EXTS.length - 1){
+    idx++;
+    imgEl.dataset.extIdx = String(idx);
+    imgEl.src = `${base}.${PHOTO_EXTS[idx]}`;
+    return;
+  }
   const div = document.createElement('div');
   div.className = 'avatar-badge';
   div.textContent = initial;
