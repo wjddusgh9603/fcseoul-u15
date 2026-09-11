@@ -316,6 +316,21 @@ function parseFlexibleDate(raw){
   return s;
 }
 function pad(n){ n=String(n); return n.length<2?'0'+n:n; }
+function yearsInRange(minDate, maxDate){
+  const minY = parseInt((minDate||'').slice(0,4),10);
+  const maxY = parseInt((maxDate||'').slice(0,4),10);
+  if(!minY || !maxY) return [];
+  const arr = [];
+  for(let y=minY;y<=maxY;y++) arr.push(y);
+  return arr;
+}
+function monthYearSelectHtml(prefix, dateStr, years){
+  const y = parseInt((dateStr||'').slice(0,4),10);
+  const mo = parseInt((dateStr||'').slice(5,7),10);
+  const yearOpts = years.map(yy=>`<option value="${yy}" ${yy===y?'selected':''}>${yy}년</option>`).join('');
+  const monthOpts = Array.from({length:12},(_,i)=>i+1).map(mm=>`<option value="${mm}" ${mm===mo?'selected':''}>${mm}월</option>`).join('');
+  return `<select id="${prefix}-year" class="dark-select">${yearOpts}</select><select id="${prefix}-month" class="dark-select">${monthOpts}</select>`;
+}
 function fmtNum(v, digits=1){
   if(v===null||v===undefined||isNaN(v)) return '–';
   return Number(v).toLocaleString('ko-KR',{minimumFractionDigits:0,maximumFractionDigits:digits});
@@ -742,10 +757,11 @@ function profileTemplate(){
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 10px;flex-wrap:wrap;gap:10px;">
         <div style="color:#ff8a75;font-weight:700;font-size:14px;">${trendMetric.label} 추이 (${trendMetric.unit})</div>
-        <div style="display:flex;gap:6px;align-items:center;font-size:12px;color:rgba(255,255,255,.65);">
-          <input type="${isMonthly?'month':'date'}" id="profile-date-from" value="${isMonthly ? (state.profileDateFrom||'').slice(0,7) : state.profileDateFrom}" class="dark-select" ${minDate?'':'disabled'}>
-          <span>~</span>
-          <input type="${isMonthly?'month':'date'}" id="profile-date-to" value="${isMonthly ? (state.profileDateTo||'').slice(0,7) : state.profileDateTo}" class="dark-select" ${maxDate?'':'disabled'}>
+        <div style="display:flex;gap:6px;align-items:center;font-size:12px;color:rgba(255,255,255,.65);flex-wrap:wrap;">
+          ${isMonthly
+            ? `${monthYearSelectHtml('profile-date-from', state.profileDateFrom||minDate, yearsInRange(minDate,maxDate))}<span>~</span>${monthYearSelectHtml('profile-date-to', state.profileDateTo||maxDate, yearsInRange(minDate,maxDate))}`
+            : `<input type="date" id="profile-date-from" value="${state.profileDateFrom}" class="dark-select" ${minDate?'':'disabled'}><span>~</span><input type="date" id="profile-date-to" value="${state.profileDateTo}" class="dark-select" ${maxDate?'':'disabled'}>`
+          }
         </div>
       </div>
       <div class="chart-wrap tall"><canvas id="chart-profile-trend"></canvas></div>
@@ -900,6 +916,16 @@ function attachHandlers(){
     state.profileDateTo = v.length===7 ? v+'-01' : v;
     drawProfileCharts();
   };
+  // 신장/체중용 년도+월 선택박스
+  function updateMonthlyDate(which){
+    const y = byId(`profile-date-${which}-year`), mo = byId(`profile-date-${which}-month`);
+    if(!y || !mo) return;
+    const dateStr = `${y.value}-${pad(mo.value)}-01`;
+    if(which==='from') state.profileDateFrom = dateStr; else state.profileDateTo = dateStr;
+    drawProfileCharts();
+  }
+  ['profile-date-from-year','profile-date-from-month'].forEach(id=>{ if(byId(id)) byId(id).onchange = ()=>updateMonthlyDate('from'); });
+  ['profile-date-to-year','profile-date-to-month'].forEach(id=>{ if(byId(id)) byId(id).onchange = ()=>updateMonthlyDate('to'); });
 
   document.querySelectorAll('.compare-year-select').forEach(sel=>{
     sel.onchange = ()=>{
