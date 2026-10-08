@@ -73,7 +73,7 @@ th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;}
           <option value="cmj">CMJ 점프</option>
           <option value="sj">SJ 점프</option>
           <option value="hamstring">햄스트링 근력</option>
-          <option value="body">신장·체중</option>
+          <option value="body">체성분 (신장·체중·체지방률·골격근량)</option>
           <option value="mas">GPS 러닝 세션</option>
         </select>
       </div>
@@ -104,25 +104,25 @@ th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;}
 <script>
 const CONFIG = {
   // Apps Script 웹 앱 배포 후 나오는 /exec URL을 여기에 붙여넣으세요.
-  API_URL: 'https://script.google.com/macros/s/AKfycbxd-RhXrlcXHtZwtrrDI6sonFPz6FHZ6IRmJSmh_mQFN4yGMrMcUGB6Sb4oQhsHN0Tj/exec'
+  API_URL: 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE'
 };
 
 const HEADERS = {
-  players:   ['이름','학년','포지션','생년월일','출신교','주발'],
+  players:   ['이름','학년','포지션','생년월일','출신교','주발','사진'],
   sprint30m: ['날짜','이름','순간최고속도'],
   cmj:       ['날짜','이름','점프높이'],
   sj:        ['날짜','이름','점프높이'],
   hamstring: ['날짜','이름','좌측근력','우측근력','불균형'],
-  body:      ['날짜','이름','신장','체중'],
+  body:      ['날짜','이름','신장','체중','체지방률','골격근량'],
   mas:       ['날짜','이름','포지션','뛴시간','뛴거리','분당거리','최고속도','HSR거리','스프린트거리']
 };
 const EXAMPLES = {
-  players:   ['김시훈','3','CAM','2011-03-24','AAFC충암','R'],
+  players:   ['김시훈','3','CAM','2011-03-24','AAFC충암','R','https://drive.google.com/uc?export=view&id=파일ID'],
   sprint30m: ['2026-09-04','김시훈','28.4'],
   cmj:       ['2026-09-04','김시훈','34.2'],
   sj:        ['2026-09-04','김시훈','31.0'],
   hamstring: ['2026-09-04','김시훈','320','305','5'],
-  body:      ['2026-09-04','김시훈','165.2','52.4'],
+  body:      ['2026-09-04','김시훈','165.2','52.4','12.5','25.3'],
   mas:       ['2026-09-04','김시훈','CAM','60','5200','86.6','24.1','320','40']
 };
 
