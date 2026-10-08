@@ -195,7 +195,7 @@ button, select, input{font-family:inherit;}
 <script>
 const CONFIG = {
   // Apps Script 웹 앱 배포 후 나오는 /exec URL을 여기에 붙여넣으세요.
-  API_URL: 'https://script.google.com/macros/s/AKfycbxd-RhXrlcXHtZwtrrDI6sonFPz6FHZ6IRmJSmh_mQFN4yGMrMcUGB6Sb4oQhsHN0Tj/exec'
+  API_URL: 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE'
 };
 </script>
 <script>
@@ -203,13 +203,15 @@ const CONFIG = {
    설정: 지표 정의
 ========================================================= */
 const METRICS = [
-  {key:'height',          label:'신장',                 unit:'cm',  source:'body',      field:'height', higherBetter:true},
-  {key:'weight',          label:'체중',                 unit:'kg',  source:'body',      field:'weight', higherBetter:true},
-  {key:'cmj_height',      label:'CMJ (카운터무브먼트)', unit:'cm',  source:'cmj',       field:'value',  higherBetter:true},
-  {key:'sj_height',       label:'SJ (스쿼트점프)',      unit:'cm',  source:'sj',        field:'value',  higherBetter:true},
-  {key:'sprint_velocity', label:'30m 스프린트',         unit:'km/h',source:'sprint30m', field:'value',  higherBetter:true},
-  {key:'gps_mas',         label:'5min MAS',             unit:'m',   source:'mas',       field:'distance', higherBetter:true, note:'5분간 측정한 총 뛴 거리'},
-  {key:'hamstring',       label:'햄스트링 근력 (좌/우)', unit:'N',  source:'hamstring', isDual:true, fields:['l_force','r_force'], fieldLabels:['좌측(L)','우측(R)'], higherBetter:true},
+  {key:'height',          label:'신장',                 unit:'cm',  source:'body',      field:'height', higherBetter:true, yMin:140, yMax:200},
+  {key:'weight',          label:'체중',                 unit:'kg',  source:'body',      field:'weight', higherBetter:true, yMin:35, yMax:100},
+  {key:'body_fat',        label:'체지방률',             unit:'%',   source:'body',      field:'fat',    higherBetter:false},
+  {key:'muscle_mass',     label:'골격근량',             unit:'kg',  source:'body',      field:'muscle', higherBetter:true},
+  {key:'cmj_height',      label:'CMJ (카운터무브먼트)', unit:'cm',  source:'cmj',       field:'value',  higherBetter:true, yMin:20, yMax:70},
+  {key:'sj_height',       label:'SJ (스쿼트점프)',      unit:'cm',  source:'sj',        field:'value',  higherBetter:true, yMin:15, yMax:65},
+  {key:'sprint_velocity', label:'30m 스프린트',         unit:'km/h',source:'sprint30m', field:'value',  higherBetter:true, yMin:23, yMax:40},
+  {key:'gps_mas',         label:'5min MAS',             unit:'m',   source:'mas',       field:'distance', higherBetter:true, note:'5분간 측정한 총 뛴 거리', digits:0, yMin:1000, yMax:2000},
+  {key:'hamstring',       label:'햄스트링 근력 (좌/우)', unit:'N',  source:'hamstring', isDual:true, fields:['l_force','r_force'], fieldLabels:['좌측(L)','우측(R)'], higherBetter:true, yMin:100, yMax:700},
 ];
 const METRIC_BY_KEY = Object.fromEntries(METRICS.map(m=>[m.key,m]));
 const PROFILE_RADAR_KEYS = ['sprint_velocity','cmj_height','sj_height','hamstring','gps_mas'];
@@ -219,6 +221,8 @@ const METRIC_TIPS = {
   sprint_velocity: '30m 구간에서 도달한 순간 최고 속도입니다.',
   gps_mas: '5분간 측정한 총 주행 거리로 유산소 능력(MAS)을 추정합니다.',
   height: '선수단 전체의 신장 분포를 확인합니다.',
+  body_fat: '체지방률(%)은 체중 중 지방이 차지하는 비율입니다. 낮을수록 좋은 지표로 보지만 성장기에는 변화 추이를 함께 확인하세요.',
+  muscle_mass: '골격근량(kg)은 근육의 양으로, 성장과 훈련에 따른 신체 발달을 보여줍니다.',
   weight: '체중 변화는 성장기 신체 발달을 보여주는 지표입니다.',
   hamstring: '햄스트링 좌/우 근력 균형은 부상 예방에 중요한 지표입니다.',
 };
@@ -277,7 +281,7 @@ async function loadData(){
       cmj:       mapMeasure(raw.cmj,       r=>({name:norm(r['이름']), date:parseFlexibleDate(norm(r['날짜'])), value:toNum(r['점프높이'])})),
       sj:        mapMeasure(raw.sj,        r=>({name:norm(r['이름']), date:parseFlexibleDate(norm(r['날짜'])), value:toNum(r['점프높이'])})),
       hamstring: mapMeasure(raw.hamstring, r=>({name:norm(r['이름']), date:parseFlexibleDate(norm(r['날짜'])), l_force:toNum(r['좌측근력']), r_force:toNum(r['우측근력']), imbalance:toNum(r['불균형'])})),
-      body:      mapMeasure(raw.body,      r=>({name:norm(r['이름']), date:parseFlexibleDate(norm(r['날짜'])), height:toNum(r['신장']), weight:toNum(r['체중'])})),
+      body:      mapMeasure(raw.body,      r=>({name:norm(r['이름']), date:parseFlexibleDate(norm(r['날짜'])), height:toNum(r['신장']), weight:toNum(r['체중']), fat:toNum(r['체지방률']), muscle:toNum(r['골격근량'])})),
       mas:       mapMeasure(raw.mas,       r=>({name:norm(r['이름']), date:parseFlexibleDate(norm(r['날짜'])), position:norm(r['포지션']), minutes:toNum(r['뛴시간']), distance:toNum(r['뛴거리']), distance_per_min:toNum(r['분당거리']), max_speed:toNum(r['최고속도']), hsr_distance:toNum(r['HSR거리']), sprint_distance:toNum(r['스프린트거리'])})),
     };
 
@@ -335,6 +339,7 @@ function fmtNum(v, digits=1){
   if(v===null||v===undefined||isNaN(v)) return '–';
   return Number(v).toLocaleString('ko-KR',{minimumFractionDigits:0,maximumFractionDigits:digits});
 }
+function fmtM(m, v){ return fmtNum(v, (m && m.digits!==undefined) ? m.digits : 1); }
 function nameKey(n){ return norm(n).replace(/^(서울U15|서울)\s*/,''); }
 // 구글 드라이브 "공유" 링크를 이미지로 바로 볼 수 있는 링크로 자동 변환 (사용자가 원본 공유링크를 그대로 붙여넣어도 동작하도록)
 function driveViewUrl(url){
@@ -499,15 +504,15 @@ function bodyMonthlySeries(playerName){
   recs.forEach(r=>{
     const mk = monthKey(r.date);
     if(!mk) return;
-    if(!byMonth[mk]) byMonth[mk] = {height:[], weight:[]};
-    const h = toNum(r.height), w = toNum(r.weight);
-    if(h!==null) byMonth[mk].height.push(h);
-    if(w!==null) byMonth[mk].weight.push(w);
+    if(!byMonth[mk]) byMonth[mk] = {height:[], weight:[], fat:[], muscle:[]};
+    ['height','weight','fat','muscle'].forEach(f=>{ const v = toNum(r[f]); if(v!==null) byMonth[mk][f].push(v); });
   });
   return Object.keys(byMonth).sort().map(mk=>({
     date: mk + '-01',
     height: byMonth[mk].height.length ? average(byMonth[mk].height) : null,
     weight: byMonth[mk].weight.length ? average(byMonth[mk].weight) : null,
+    fat: byMonth[mk].fat.length ? average(byMonth[mk].fat) : null,
+    muscle: byMonth[mk].muscle.length ? average(byMonth[mk].muscle) : null,
   }));
 }
 // full time series: single metrics -> [{date,value}], dual -> [{date,l,r}]
@@ -595,8 +600,8 @@ function teamTemplate(){
     });
     bodyHtml = `
       <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px;">
-        <div class="kpi-card"><div class="label">그룹 평균</div><div class="num">${fmtNum(avg)}<span>${metric.unit}</span></div></div>
-        <div class="kpi-card"><div class="label">팀 내 최고 기록</div><div class="num">${best?fmtNum(best.value):'–'}<span>${metric.unit}${best?' · '+best.name:''}</span></div></div>
+        <div class="kpi-card"><div class="label">그룹 평균</div><div class="num">${fmtM(metric,avg)}<span>${metric.unit}</span></div></div>
+        <div class="kpi-card"><div class="label">팀 내 최고 기록</div><div class="num">${best?fmtM(metric,best.value):'–'}<span>${metric.unit}${best?' · '+best.name:''}</span></div></div>
         <div class="kpi-card"><div class="label">분석 팁</div><div style="font-size:13px;color:var(--ink-soft);line-height:1.5;">${METRIC_TIPS[state.teamMetric]||''}</div></div>
       </div>
       <div class="card">
@@ -607,7 +612,7 @@ function teamTemplate(){
           return `<div class="rank-row">
             <div class="rank-name">${p.name}<div class="rank-pos">${p.position||''}</div></div>
             <div class="rank-bar-wrap"><div class="rank-bar" style="width:${pct}%"></div></div>
-            <div class="rank-val">${val===null?'–':fmtNum(val)+' '+metric.unit}</div>
+            <div class="rank-val">${val===null?'–':fmtM(metric,val)+' '+metric.unit}</div>
           </div>`;
         }).join('') : '<div class="empty">선수가 없습니다.</div>'}
       </div>
@@ -692,9 +697,9 @@ function profileTemplate(){
       const diff = val-avg;
       const better = m.higherBetter===null ? null : (m.higherBetter ? diff>=0 : diff<=0);
       const cls = better===null ? '' : (better?'diff-up':'diff-down');
-      diffHtml = `<span class="${cls}">${diff>=0?'+':''}${fmtNum(diff)}</span>`;
+      diffHtml = `<span class="${cls}">${diff>=0?'+':''}${fmtM(m,diff)}</span>`;
     }
-    return `<tr><td>${m.label}</td><td>${val===null?'–':fmtNum(val)+' '+m.unit}</td><td>${avg===null?'–':fmtNum(avg)+' '+m.unit}</td><td>${diffHtml}</td></tr>`;
+    return `<tr><td>${m.label}</td><td>${val===null?'–':fmtM(m,val)+' '+m.unit}</td><td>${avg===null?'–':fmtM(m,avg)+' '+m.unit}</td><td>${diffHtml}</td></tr>`;
   }).join('');
 
   // 추적관찰 차트 설정 (지표 선택 + 기간 필터)
@@ -830,7 +835,7 @@ function compareTemplate(){
     }
     const cells = selectedPlayers.map(name=>{
       const v = metricBestValue(m.key, name);
-      return `<td>${v===null?'–':fmtNum(v)+' '+m.unit}</td>`;
+      return `<td>${v===null?'–':fmtM(m,v)+' '+m.unit}</td>`;
     }).join('');
     return `<tr><td>${m.label}</td>${cells}</tr>`;
   }).join('');
@@ -873,7 +878,7 @@ function rankingTemplate(){
         <div class="rank-num ${rankCls}">${i+1}</div>
         <div class="rank-name">${r.name}<div class="rank-pos">${r.position||''}</div></div>
         <div class="rank-bar-wrap"><div class="rank-bar" style="width:${Math.max(barPct,3)}%"></div></div>
-        <div class="rank-val">${fmtNum(r.value)} ${m.unit}${m.isDual?' (평균)':''}</div>
+        <div class="rank-val">${fmtM(m,r.value)} ${m.unit}${m.isDual?' (평균)':''}</div>
       </div>`;
   }).join('') || '<div class="empty">데이터가 없습니다.</div>';
 
@@ -1030,6 +1035,30 @@ function drawTeamCharts(){
   }, 'team-hamstring');
 }
 
+// 데이터 포인트 위에 숫자를 표시하는 간단한 내장 플러그인 (외부 라이브러리 불필요)
+const valueLabelPlugin = {
+  id:'valueLabels',
+  afterDatasetsDraw(chart, args, opts){
+    if(!opts || !opts.show) return;
+    const ctx = chart.ctx;
+    chart.data.datasets.forEach((ds, di)=>{
+      const meta = chart.getDatasetMeta(di);
+      if(meta.hidden) return;
+      const below = opts.belowFor === di;
+      meta.data.forEach((pt, i)=>{
+        const v = ds.data[i];
+        if(v===null || v===undefined || !Number.isFinite(v)) return;
+        ctx.save();
+        ctx.font = '600 11px Inter, sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,.92)';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = below ? 'top' : 'bottom';
+        ctx.fillText(fmtNum(v, opts.digits), pt.x, pt.y + (below ? 8 : -8));
+        ctx.restore();
+      });
+    });
+  }
+};
 function drawProfileCharts(){
   const p = DATA.players.find(pl=>pl.name===state.profilePlayer);
   if(!p) return;
@@ -1064,6 +1093,9 @@ function drawProfileCharts(){
     ctxT.parentElement.innerHTML = '<div class="empty" style="color:rgba(255,255,255,.6);">해당 기간의 기록이 없습니다.</div>';
     return;
   }
+  const yScale = {ticks:{color:'rgba(255,255,255,.6)', font:{family:'Inter',size:11}}, grid:{color:'rgba(255,255,255,.08)'}};
+  if(m.yMin!==undefined){ yScale.min = m.yMin; yScale.max = m.yMax; }
+  const digits = (m.digits!==undefined) ? m.digits : 1;
   const axisLabels = m.source==='body' ? series.map(s=>s.date.slice(0,7)) : series.map(s=>s.date);
   if(m.isDual){
     safeCreateChart(ctxT, {
@@ -1075,13 +1107,15 @@ function drawProfileCharts(){
           {label:'우측(R)', data:cleanNums(series.map(s=>s.r)), borderColor:HAM_COLORS[1], backgroundColor:HAM_COLORS[1]+'22', fill:false, tension:.3, pointRadius:3, spanGaps:true}
         ]
       },
-      options: darkChartOpts({plugins:{legend:{display:true}}})
+      options: darkChartOpts({layout:{padding:{top:24,bottom:14,right:12}}, scales:{x:{ticks:{color:'rgba(255,255,255,.6)', font:{family:'Inter',size:11}}, grid:{color:'rgba(255,255,255,.08)'}}, y:yScale}, plugins:{legend:{display:true}, valueLabels:{show:true, digits, belowFor:1}}}),
+      plugins:[valueLabelPlugin]
     }, 'profile-trend');
   } else {
     safeCreateChart(ctxT, {
       type:'line',
       data:{labels:axisLabels, datasets:[{data:cleanNums(series.map(s=>s.value)), borderColor:'#ff5a4a', backgroundColor:'rgba(255,90,74,.15)', fill:true, tension:.3, pointRadius:3, spanGaps:true}]},
-      options: darkChartOpts({plugins:{legend:{display:false}}})
+      options: darkChartOpts({layout:{padding:{top:24,right:12}}, scales:{x:{ticks:{color:'rgba(255,255,255,.6)', font:{family:'Inter',size:11}}, grid:{color:'rgba(255,255,255,.08)'}}, y:yScale}, plugins:{legend:{display:false}, valueLabels:{show:true, digits}}}),
+      plugins:[valueLabelPlugin]
     }, 'profile-trend');
   }
 }
