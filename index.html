@@ -205,8 +205,8 @@ const CONFIG = {
 const METRICS = [
   {key:'height',          label:'신장',                 unit:'cm',  source:'body',      field:'height', higherBetter:true, yMin:140, yMax:200},
   {key:'weight',          label:'체중',                 unit:'kg',  source:'body',      field:'weight', higherBetter:true, yMin:35, yMax:100},
-  {key:'body_fat',        label:'체지방률',             unit:'%',   source:'body',      field:'fat',    higherBetter:false},
-  {key:'muscle_mass',     label:'골격근량',             unit:'kg',  source:'body',      field:'muscle', higherBetter:true},
+  {key:'body_fat',        label:'체지방률',             unit:'%',   source:'body',      field:'fat',    higherBetter:false, yMin:0, yMax:35},
+  {key:'muscle_mass',     label:'골격근량',             unit:'kg',  source:'body',      field:'muscle', higherBetter:true, yMin:10, yMax:60},
   {key:'cmj_height',      label:'CMJ (카운터무브먼트)', unit:'cm',  source:'cmj',       field:'value',  higherBetter:true, yMin:20, yMax:70},
   {key:'sj_height',       label:'SJ (스쿼트점프)',      unit:'cm',  source:'sj',        field:'value',  higherBetter:true, yMin:15, yMax:65},
   {key:'sprint_velocity', label:'30m 스프린트',         unit:'km/h',source:'sprint30m', field:'value',  higherBetter:true, yMin:23, yMax:40},
@@ -227,6 +227,7 @@ const METRIC_TIPS = {
   hamstring: '햄스트링 좌/우 근력 균형은 부상 예방에 중요한 지표입니다.',
 };
 const HAM_COLORS = ['#c0392b', '#e08e2d'];
+const HAM_LINE_COLORS = ['#ff5a4a', '#ffa733']; // 어두운 배경 차트용 (빨강/주황)
 
 /* =========================================================
    상태 & 데이터 로딩
@@ -317,6 +318,8 @@ function parseFlexibleDate(raw){
   if(m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/)) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
   if(m = s.match(/^(\d{2})\.\s*(\d{1,2})\.\s*(\d{1,2})\.?$/)) return `20${m[1]}-${pad(m[2])}-${pad(m[3])}`;
   if(m = s.match(/^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.?$/)) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
+  // 그 외 변형(예: '2026- 8- 3', '2026-8-3 ')도 숫자 3개를 뽑아 YYYY-MM-DD로 통일 (정렬이 어긋나지 않도록)
+  if(m = s.match(/^(\d{4})\D+(\d{1,2})\D+(\d{1,2})/)) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
   return s;
 }
 function pad(n){ n=String(n); return n.length<2?'0'+n:n; }
@@ -769,9 +772,32 @@ function profileTemplate(){
           }
         </div>
       </div>
+      ${trendMetric.key==='height' ? heightGrowthHtml(p.name) : ''}
       <div class="chart-wrap tall"><canvas id="chart-profile-trend"></canvas></div>
     </div>
   `;
+}
+
+/* ---------- 신장 성장량 (오늘 날짜 기준 최근 N개월) ---------- */
+function heightGrowthHtml(playerName){
+  const series = bodyMonthlySeries(playerName).filter(r=>r.height!==null); // 월별 평균 신장
+  const now = new Date();
+  const curKey = now.getFullYear() + '-' + pad(now.getMonth()+1);
+  const upto = series.filter(r=>monthKey(r.date) <= curKey);
+  const latest = upto.length ? upto[upto.length-1] : null;
+  function growthText(n){
+    if(!latest) return `최근 ${n}개월 동안 – (기록 없음)`;
+    const base = new Date(now.getFullYear(), now.getMonth()-n, 1);
+    const baseKey = base.getFullYear() + '-' + pad(base.getMonth()+1);
+    const past = upto.filter(r=>monthKey(r.date) <= baseKey);
+    if(!past.length) return `${n}개월 동안 – (${n}개월 전 기록 없음)`;
+    const diff = latest.height - past[past.length-1].height;
+    const cls = diff>=0 ? 'color:#7be0a0;' : 'color:#ff8a75;';
+    return `${n}개월 동안 <b style="${cls}">${diff>=0?"+":""}${diff.toFixed(1)}cm</b> ${diff>=0?'성장':'변화'}`;
+  }
+  return `<div style="display:flex;gap:18px;flex-wrap:wrap;justify-content:flex-end;font-size:13px;color:rgba(255,255,255,.85);margin:-2px 0 10px;">
+    <span>${growthText(6)}</span><span>${growthText(3)}</span>
+  </div>`;
 }
 
 /* ---------- 개인 인터랙티브 비교 ---------- */
@@ -1041,19 +1067,36 @@ const valueLabelPlugin = {
   afterDatasetsDraw(chart, args, opts){
     if(!opts || !opts.show) return;
     const ctx = chart.ctx;
-    chart.data.datasets.forEach((ds, di)=>{
+    const dsets = chart.data.datasets;
+    const dual = dsets.length === 2 && opts.colors;
+    dsets.forEach((ds, di)=>{
       const meta = chart.getDatasetMeta(di);
       if(meta.hidden) return;
-      const below = opts.belowFor === di;
       meta.data.forEach((pt, i)=>{
         const v = ds.data[i];
         if(v===null || v===undefined || !Number.isFinite(v)) return;
+        // 좌/우 두 선이 있을 때: 화면상 위쪽에 있는 점은 숫자를 위에, 아래쪽 점은 숫자를 아래에 둬서 서로 겹치지 않게 함
+        let below = false;
+        if(dual){
+          const other = chart.getDatasetMeta(1-di).data[i];
+          const ov = dsets[1-di].data[i];
+          if(other && ov!==null && ov!==undefined && Number.isFinite(ov)){
+            below = (pt.y > other.y) || (pt.y === other.y && di === 1);
+          }
+        }
         ctx.save();
-        ctx.font = '600 11px Inter, sans-serif';
-        ctx.fillStyle = 'rgba(255,255,255,.92)';
+        ctx.font = '700 11px Inter, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = below ? 'top' : 'bottom';
-        ctx.fillText(fmtNum(v, opts.digits), pt.x, pt.y + (below ? 8 : -8));
+        const txt = fmtNum(v, opts.digits);
+        const y = pt.y + (below ? 9 : -9);
+        // 선과 겹쳐도 읽히도록 어두운 외곽선
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(20,24,32,.95)';
+        ctx.strokeText(txt, pt.x, y);
+        ctx.fillStyle = dual ? opts.colors[di] : 'rgba(255,255,255,.92)';
+        ctx.fillText(txt, pt.x, y);
         ctx.restore();
       });
     });
@@ -1103,11 +1146,11 @@ function drawProfileCharts(){
       data:{
         labels: axisLabels,
         datasets:[
-          {label:'좌측(L)', data:cleanNums(series.map(s=>s.l)), borderColor:HAM_COLORS[0], backgroundColor:HAM_COLORS[0]+'22', fill:false, tension:.3, pointRadius:3, spanGaps:true},
-          {label:'우측(R)', data:cleanNums(series.map(s=>s.r)), borderColor:HAM_COLORS[1], backgroundColor:HAM_COLORS[1]+'22', fill:false, tension:.3, pointRadius:3, spanGaps:true}
+          {label:'좌측(L)', data:cleanNums(series.map(s=>s.l)), borderColor:HAM_LINE_COLORS[0], backgroundColor:HAM_LINE_COLORS[0]+'22', fill:false, tension:.3, pointRadius:3, spanGaps:true},
+          {label:'우측(R)', data:cleanNums(series.map(s=>s.r)), borderColor:HAM_LINE_COLORS[1], backgroundColor:HAM_LINE_COLORS[1]+'22', fill:false, tension:.3, pointRadius:3, spanGaps:true}
         ]
       },
-      options: darkChartOpts({layout:{padding:{top:24,bottom:14,right:12}}, scales:{x:{ticks:{color:'rgba(255,255,255,.6)', font:{family:'Inter',size:11}}, grid:{color:'rgba(255,255,255,.08)'}}, y:yScale}, plugins:{legend:{display:true}, valueLabels:{show:true, digits, belowFor:1}}}),
+      options: darkChartOpts({layout:{padding:{top:24,bottom:14,right:12}}, scales:{x:{ticks:{color:'rgba(255,255,255,.6)', font:{family:'Inter',size:11}}, grid:{color:'rgba(255,255,255,.08)'}}, y:yScale}, plugins:{legend:{display:true}, valueLabels:{show:true, digits, colors:HAM_LINE_COLORS}}}),
       plugins:[valueLabelPlugin]
     }, 'profile-trend');
   } else {
