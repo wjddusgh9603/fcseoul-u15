@@ -302,13 +302,20 @@ async function loadData(){
       mas:       mapMeasure(raw.mas,       r=>({name:norm(r['이름']), date:parseFlexibleDate(norm(r['날짜'])), position:norm(r['포지션']), minutes:toNum(r['뛴시간']), distance:toNum(r['뛴거리']), distance_per_min:toNum(r['분당거리']), max_speed:toNum(r['최고속도']), hsr_distance:toNum(r['HSR거리']), sprint_distance:toNum(r['스프린트거리'])})),
     };
 
-    DATA = {players, measurements};
+    // 부상 이력 (선수별)
+    const injuries = (raw.injury||[]).map(r=>({
+      name: norm(r['이름']), part: norm(r['부상부위 및 질환']), type: norm(r['부상유형']),
+      start: parseFlexibleDate(norm(r['시작일'])), end: parseFlexibleDate(norm(r['종료일'])) || '',
+      days: toNum(r['부상일수']), ret: norm(r['복귀일'])
+    })).filter(r=>r.name && r.start && /^\d{4}-\d{2}-\d{2}$/.test(r.start));
+
+    DATA = {players, measurements, injuries};
     if(statusEl) statusEl.textContent = '마지막 업데이트: ' + new Date().toLocaleString('ko-KR');
   }catch(e){
     console.error(e);
     if(statusEl) statusEl.textContent = '데이터를 불러오지 못했습니다';
     showToast('데이터 로드 실패: API_URL 및 Apps Script 배포 상태를 확인해주세요');
-    if(!DATA) DATA = {players:[], measurements:{sprint30m:[],cmj:[],sj:[],hamstring:[],body:[],mas:[],cod_ball:[],cod_free:[]}};
+    if(!DATA) DATA = {players:[], measurements:{sprint30m:[],cmj:[],sj:[],hamstring:[],body:[],mas:[],cod_ball:[],cod_free:[]}, injuries:[]};
   }
 }
 
@@ -791,7 +798,46 @@ function profileTemplate(){
       ${trendMetric.key==='height' ? heightGrowthHtml(p.name) : ''}
       <div class="chart-wrap tall"><canvas id="chart-profile-trend"></canvas></div>
     </div>
+
+    ${injuryHistoryHtml(p.name)}
   `;
+}
+
+/* ---------- 부상 이력 (개인 프로필 하단) ---------- */
+function injuryHistoryHtml(playerName){
+  const key = nameKey(playerName);
+  const list = (DATA.injuries||[]).filter(r=>nameKey(r.name)===key).sort((a,b)=> a.start<b.start ? -1 : a.start>b.start ? 1 : 0);
+  const today = new Date(); const todayIso = today.getFullYear()+'-'+pad(today.getMonth()+1)+'-'+pad(today.getDate());
+  const daysOf = r=>{
+    if(r.days!==null) return r.days;
+    const e = r.end || todayIso; // 종료일이 없으면 오늘까지
+    return Math.round((new Date(e)-new Date(r.start))/86400000)+1;
+  };
+  const typeStyle = t=>{
+    if(t==='접촉') return 'background:#fbe6e1;color:#b3492f;';
+    if(t==='비접촉') return 'background:#fdf1d6;color:#8a6410;';
+    if(t && t.indexOf('감염')>=0) return 'background:#e3eefb;color:#2b5d8f;';
+    return 'background:#eee;color:#666;';
+  };
+  const ongoing = r=>!r.end && !/^\d{4}-/.test(r.ret||'');
+  const injuryOnly = list.filter(r=>!(r.type||'').includes('감염'));
+  const totalDays = list.reduce((s,r)=>s+daysOf(r),0);
+  const rowsHtml = list.map(r=>{
+    const period = r.end && r.end!==r.start ? `${r.start} ~ ${r.end}` : (r.end ? r.start : `${r.start} ~`);
+    const ret = r.ret ? (/^\d{4}-/.test(r.ret) ? r.ret : `<span class="pill">${r.ret}</span>`) : (ongoing(r) ? '<span class="pill" style="background:#fbe6e1;color:#b3492f;">진행 중</span>' : '–');
+    return `<tr><td style="white-space:nowrap;">${period}</td><td>${r.part||'–'}</td><td><span class="pill" style="${typeStyle(r.type)}">${r.type||'미분류'}</span></td><td style="white-space:nowrap;">${daysOf(r)}일</td><td style="white-space:nowrap;">${ret}</td></tr>`;
+  }).join('');
+  return `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+        <h3 style="margin:0;">🩹 부상 이력</h3>
+        <div style="font-size:12px;color:var(--ink-soft);">${list.length ? `총 ${list.length}건 (부상 ${injuryOnly.length} · 질환 ${list.length-injuryOnly.length}) · 누적 ${totalDays}일` : ''}</div>
+      </div>
+      ${list.length ? `<div style="overflow-x:auto;"><table class="metric-table">
+        <thead><tr><th>기간</th><th>부상 부위 및 질환</th><th>유형</th><th>일수</th><th>복귀일</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table></div>` : '<div class="empty">기록된 부상 이력이 없습니다.</div>'}
+    </div>`;
 }
 
 /* ---------- 신장 성장량 (오늘 날짜 기준 최근 N개월) ---------- */
