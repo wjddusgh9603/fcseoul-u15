@@ -75,6 +75,9 @@ th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;}
           <option value="hamstring">햄스트링 근력</option>
           <option value="body">체성분 (신장·체중·체지방률·골격근량)</option>
           <option value="mas">GPS 러닝 세션</option>
+          <option value="cod_ball">COD 방향전환 - 볼 (초)</option>
+          <option value="cod_free">COD 방향전환 - 맨몸 (초)</option>
+          <option value="injury">부상 이력</option>
         </select>
       </div>
       <div class="note" id="template-note"></div>
@@ -114,7 +117,10 @@ const HEADERS = {
   sj:        ['날짜','이름','점프높이'],
   hamstring: ['날짜','이름','좌측근력','우측근력','불균형'],
   body:      ['날짜','이름','신장','체중','체지방률','골격근량'],
-  mas:       ['날짜','이름','포지션','뛴시간','뛴거리','분당거리','최고속도','HSR거리','스프린트거리']
+  mas:       ['날짜','이름','포지션','뛴시간','뛴거리','분당거리','최고속도','HSR거리','스프린트거리'],
+  cod_ball:  ['날짜','이름','기록'],
+  cod_free:  ['날짜','이름','기록'],
+  injury:    ['이름','부상부위 및 질환','부상유형','시작일','종료일','부상일수','복귀일']
 };
 const EXAMPLES = {
   players:   ['김시훈','3','CAM','2011-03-24','AAFC충암','R','https://drive.google.com/uc?export=view&id=파일ID'],
@@ -123,7 +129,10 @@ const EXAMPLES = {
   sj:        ['2026-09-04','김시훈','31.0'],
   hamstring: ['2026-09-04','김시훈','320','305','5'],
   body:      ['2026-09-04','김시훈','165.2','52.4','12.5','25.3'],
-  mas:       ['2026-09-04','김시훈','CAM','60','5200','86.6','24.1','320','40']
+  mas:       ['2026-09-04','김시훈','CAM','60','5200','86.6','24.1','320','40'],
+  cod_ball:  ['2026-09-04','김시훈','8.592'],
+  cod_free:  ['2026-09-04','김시훈','7.465'],
+  injury:    ['김시훈','우측 발목 염좌','접촉','2026-09-01','2026-09-10','10','2026-09-11']
 };
 
 let TOKEN = localStorage.getItem('fcseoul-admin-token') || '';
@@ -195,7 +204,7 @@ $('upload-file').onchange = (e)=>{
   Papa.parse(file, {
     header:true, skipEmptyLines:true, encoding:'UTF-8',
     complete: (results)=>{
-      parsedRows = results.data;
+      parsedRows = prepareRows($('upload-type').value, results.data);
       renderPreview(parsedRows);
     },
     error: (err)=>{
@@ -205,10 +214,64 @@ $('upload-file').onchange = (e)=>{
   });
 };
 
+// COD: 원본 장비 CSV(Date, FamilyName, Split1 / 일/월/년)도 그대로 올릴 수 있고,
+// 같은 날 같은 선수의 여러 기록 중 가장 낮은 값만 남깁니다. (5초 미만은 측정 오류로 제외)
+let prepNote = '';
+// 부상 이력: 기존 엑셀/CSV 형식(부상기간 '25.01.05~25.01.17(13일)', 복귀일 '25.01.18')을 시작일/종료일/부상일수로 풀어서 올립니다.
+function prepareInjury(rows){
+  const iso = s=>{ const m=String(s||'').match(/(\d{2})\.(\d{2})\.(\d{2})/); return m?`20${m[1]}-${m[2]}-${m[3]}`:''; };
+  const out = []; let converted = 0;
+  rows.forEach(r0=>{
+    const r = {}; Object.keys(r0).forEach(k=>{ r[k.trim()] = (r0[k]===undefined||r0[k]===null) ? '' : String(r0[k]).trim(); });
+    if(!r['이름']) return;
+    if(r['부상기간'] !== undefined){ // 원본 형식
+      const per = r['부상기간'];
+      const ds = per.match(/\d{2}\.\d{2}\.\d{2}/g) || [];
+      if(!ds.length) return;
+      const s = iso(ds[0]);
+      const e = ds.length>1 ? iso(ds[1]) : (/~\s*$/.test(per) ? '' : s);
+      const dm = per.match(/\((\d*)일\)/);
+      let days = dm && dm[1] ? dm[1] : '';
+      if(!days && e) days = String(Math.round((new Date(e)-new Date(s))/86400000)+1);
+      const rt = /^\d{2}\.\d{2}\.\d{2}/.test(r['복귀일']||'') ? iso(r['복귀일']) : (r['복귀일']||'');
+      let typ = r['부상 유형(접촉,비접촉, 감염 및 질환)'] ?? r['부상유형'] ?? '';
+      if(typ==='접촉성') typ='접촉';
+      out.push({'이름':r['이름'], '부상부위 및 질환':r['부상부위 및 질환'], '부상유형':typ, '시작일':s, '종료일':e, '부상일수':days, '복귀일':rt});
+      converted++;
+    } else {
+      out.push(r);
+    }
+  });
+  prepNote = converted ? `원본 형식 ${converted}행을 시작일/종료일/부상일수로 변환` : '';
+  return out;
+}
+function prepareRows(type, rows){
+  prepNote = '';
+  if(type === 'injury') return prepareInjury(rows);
+  if(type !== 'cod_ball' && type !== 'cod_free') return rows;
+  const best = {}; let total = 0, dropped = 0;
+  rows.forEach(r=>{
+    let date = (r['날짜'] ?? r['Date'] ?? '').toString().trim();
+    const name = (r['이름'] ?? r['FamilyName'] ?? '').toString().trim();
+    const v = parseFloat(r['기록'] ?? r['Split1']);
+    if(!date || !name || !isFinite(v)) return;
+    total++;
+    const m = date.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); // 26/05/2025 -> 2025-05-26
+    if(m) date = `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+    if(v < 5){ dropped++; return; }
+    const k = name + '|' + date;
+    if(!best[k] || v < best[k]['기록']) best[k] = {'날짜':date, '이름':name, '기록':v};
+  });
+  const out = Object.values(best).sort((a,b)=> a['날짜']<b['날짜']?-1:a['날짜']>b['날짜']?1:a['이름']<b['이름']?-1:1);
+  prepNote = `원본 ${total}행 → 같은 날 최저값만 남겨 ${out.length}행` + (dropped ? ` (5초 미만 ${dropped}건은 측정 오류로 제외)` : '');
+  return out;
+}
+$('upload-type').addEventListener('change', ()=>{ parsedRows = null; $('preview-wrap').innerHTML=''; $('upload-file').value=''; });
+
 function renderPreview(rows){
   const type = $('upload-type').value;
   const headers = HEADERS[type];
-  let html = `<div style="font-size:12px;color:var(--ink-soft);margin-top:10px;">미리보기 (${rows.length}행 중 최대 5행)</div>`;
+  let html = `<div style="font-size:12px;color:var(--ink-soft);margin-top:10px;">미리보기 (${rows.length}행 중 최대 5행)${prepNote?' · '+prepNote:''}</div>`;
   html += '<table><thead><tr>' + headers.map(h=>`<th>${h}</th>`).join('') + '</tr></thead><tbody>';
   rows.slice(0,5).forEach(r=>{
     html += '<tr>' + headers.map(h=>`<td>${r[h]!==undefined?r[h]:''}</td>`).join('') + '</tr>';
